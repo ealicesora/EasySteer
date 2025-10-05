@@ -1,7 +1,7 @@
 import os
 import vllm
 import json
-from easysteer.hidden_states import get_all_hidden_states
+from easysteer.hidden_states import get_all_hidden_states,get_all_hidden_states_capture,get_all_hidden_states_by_capture
 from vllm import LLM,SamplingParams
 
 from easysteer.steer import extract_pca_control_vector,StatisticalControlVector
@@ -88,7 +88,8 @@ def build_glm_prompt(q: str,
         if mode == "fast":
             seed = "To "
         elif mode == "slow":
-            seed = "Alright, "
+            seed = ""
+            # seed = "Alright, "
         else:
             seed = ""  # base 模式不强行加种子词
         prompt += "<think>" + seed
@@ -273,7 +274,7 @@ def second_paragraph_break_token_pos(text: str):
         return None
 
     enc = tokenizer(
-        text, add_special_tokens=True,
+        text, add_special_tokens=False,
         return_offsets_mapping=True
     )
     # 找到“覆盖 start 字符”的 token 索引
@@ -385,19 +386,19 @@ def build_hs_pack(text_prompts, answers, tokenizer,
 
 
 
-# # —— 用在 fast/slow 上 —— #
-# qa_fast, fast_pos = build_hs_pack(texts_fast, ans_fast, tokenizer)
-# qa_slow, slow_pos = build_hs_pack(texts_slow, ans_slow, tokenizer)
+# —— 用在 fast/slow 上 —— #
+qa_fast, fast_pos = build_hs_pack(texts_fast, ans_fast, tokenizer)
+qa_slow, slow_pos = build_hs_pack(texts_slow, ans_slow, tokenizer)
 
-# # 可选：看长度分布
-# def _toklen(t): 
-#     return len(tokenizer(t, add_special_tokens=False)["input_ids"])
-# fast_hs_len = np.array([_toklen(t) for t in qa_fast], dtype=np.int32)
-# slow_hs_len = np.array([_toklen(t) for t in qa_slow], dtype=np.int32)
-# print(f"[HS-short] fast mean={fast_hs_len.mean():.1f}, max={fast_hs_len.max()}, n={len(fast_hs_len)}")
-# print(f"[HS-short] slow mean={slow_hs_len.mean():.1f}, max={slow_hs_len.max()}, n={len(slow_hs_len)}")
+# 可选：看长度分布
+def _toklen(t): 
+    return len(tokenizer(t, add_special_tokens=False)["input_ids"])
+fast_hs_len = np.array([_toklen(t) for t in qa_fast], dtype=np.int32)
+slow_hs_len = np.array([_toklen(t) for t in qa_slow], dtype=np.int32)
+print(f"[HS-short] fast mean={fast_hs_len.mean():.1f}, max={fast_hs_len.max()}, n={len(fast_hs_len)}")
+print(f"[HS-short] slow mean={slow_hs_len.mean():.1f}, max={slow_hs_len.max()}, n={len(slow_hs_len)}")
 
-# del fast_hs_len,slow_hs_len
+del fast_hs_len,slow_hs_len
 
 
 
@@ -436,6 +437,8 @@ def safe_pick(hs_layers, token_idx):
 
 llm_hs = LLM(model=model_path,task="reward",tensor_parallel_size=1,trust_remote_code=True,enforce_eager=True,    gpu_memory_utilization=0.90,max_model_len=8192)
 
+capture = get_all_hidden_states_capture(llm_hs)
+
 directcollect = False
 all_hidden_states = []
 if directcollect:
@@ -456,7 +459,7 @@ if directcollect:
 
     
 else:
-    BATCH = 8  # 或 4/16，视内存而定
+    BATCH = 32  # 或 4/16，视内存而定
 
     fast_idx_list, slow_idx_list = [], []
     all_hidden_states = []
@@ -475,18 +478,22 @@ else:
     # --- fast ---
     for s in range(0, len(qa_fast), BATCH):
         chunk = qa_fast[s:s+BATCH]
-        hs_chunk, _ = get_all_hidden_states(llm_hs, chunk, split_by_samples=True)
+        hs_chunk, _ = get_all_hidden_states_by_capture(llm_hs, capture, chunk, split_by_samples=True)
         for i in range(30):
             if len(chunk) != len(hs_chunk):
                 print(f"[warn] retry {i} times for batch {s}-{s+len(chunk)}")
-                hs_chunk, _ = get_all_hidden_states(llm_hs, chunk, split_by_samples=True)
+                hs_chunk, _ = get_all_hidden_states_by_capture(llm_hs, capture,chunk, split_by_samples=True)
         print(f"[diag] fast batch {s}-{s+len(chunk)}: want={len(chunk)} got={len(hs_chunk)}")
         collect("fast",hs_chunk, fast_pos[s:s+BATCH])
 
     # --- slow ---
     for s in range(0, len(qa_slow), BATCH):
         chunk = qa_slow[s:s+BATCH]
-        hs_chunk, _ = get_all_hidden_states(llm_hs, chunk, split_by_samples=True)
+        hs_chunk, _ = get_all_hidden_states_by_capture(llm_hs,capture, chunk, split_by_samples=True)
+        for i in range(30):
+            if len(chunk) != len(hs_chunk):
+                print(f"[warn] retry {i} times for batch {s}-{s+len(chunk)}")
+                hs_chunk, _ = get_all_hidden_states_by_capture(llm_hs,capture, chunk, split_by_samples=True)
         print(f"[diag] fast batch {s}-{s+len(chunk)}: want={len(chunk)} got={len(hs_chunk)}")
         collect("slow",hs_chunk, slow_pos[s:s+BATCH])
 

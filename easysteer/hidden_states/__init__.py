@@ -33,6 +33,43 @@ def get_all_hidden_states(llm, texts, adapter=None, split_by_samples=True):
     capture = HiddenStatesCapture(adapter=adapter)
     return capture.get_all_hidden_states(llm, texts, split_by_samples=split_by_samples)
 
+
+def get_all_hidden_states_capture(llm, adapter=None):
+    """
+    Convenience function to get all hidden states from vLLM
+    
+    Args:
+        llm: The vLLM LLM instance
+        texts: List of input texts
+        adapter: LLMAdapter instance (uses VLLMAdapter if None)
+        split_by_samples: Whether to split hidden states by samples
+        
+    Returns:
+        Tuple of (hidden_states, outputs)
+    """
+    if adapter is None:
+        adapter = _auto_detect_adapter(llm)
+    
+    capture = HiddenStatesCapture(adapter=adapter)
+    return capture
+
+def get_all_hidden_states_by_capture(llm,capture, texts,split_by_samples=True):
+    """
+    Convenience function to get all hidden states from vLLM
+    
+    Args:
+        llm: The vLLM LLM instance
+        texts: List of input texts
+        adapter: LLMAdapter instance (uses VLLMAdapter if None)
+        split_by_samples: Whether to split hidden states by samples
+        
+    Returns:
+        Tuple of (hidden_states, outputs)
+    """
+
+    return capture.get_all_hidden_states(llm, texts, split_by_samples=split_by_samples)
+
+
 def _auto_detect_adapter(llm):
     """Auto-detect the appropriate adapter for the LLM"""
     llm_type = type(llm).__name__
