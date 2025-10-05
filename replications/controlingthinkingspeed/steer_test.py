@@ -25,10 +25,10 @@ steer_vector_request_pos = SteerVectorRequest(
             steer_vector_name="fast",
             steer_vector_id=1,
             steer_vector_local_path=vector_path,
-            scale=16.0,
-            target_layers=list(range(19,39)),
-            prefill_trigger_tokens=[-1],
-            prefill_trigger_positions=[-1],
+            scale=8.0,
+            target_layers=list(range(19,29)),
+            # prefill_trigger_tokens=[-1],
+            # prefill_trigger_positions=[-1],
             generate_trigger_tokens=[-1],
             debug=False,
             algorithm='direct'
@@ -37,10 +37,10 @@ steer_vector_request_neg = SteerVectorRequest(
             steer_vector_name="slow",
             steer_vector_id=2,
             steer_vector_local_path=vector_path,
-            scale=-16.0,
-            target_layers=list(range(19,39)),
-            prefill_trigger_tokens=[-1],
-            prefill_trigger_positions=[-1],
+            scale=-8.0,
+            target_layers=list(range(19,29)),
+            # prefill_trigger_tokens=[-1],
+            # prefill_trigger_positions=[-1],
             generate_trigger_tokens=[-1],
             debug=False,
             algorithm='direct'
@@ -67,7 +67,9 @@ print("PROMPT PREVIEW:\n", text[:300])
 
 
 
-llm = LLM(model=model_path, enable_steer_vector=True, tensor_parallel_size=1,enforce_eager=True)
+llm = LLM(model=model_path, enable_steer_vector=True, tensor_parallel_size=1,enforce_eager=True,    gpu_memory_utilization=0.90,
+    trust_remote_code=True)
+
 output_base = llm.generate(
     text,
     sampling_params

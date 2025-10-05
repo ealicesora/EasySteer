@@ -17,9 +17,9 @@ file_path = "/home/bingxing2/ailab/gaoyuanyuan_p/yuning/temp/test.jsonl" #GSM8K
 model_path = "/home/bingxing2/ailab/gaoyuanyuan_p/GLM-4.1V-9B-Thinking"
 
 # vector_path = "vectors/thinking_switch_pca_MATH-500.gguf" #MATH-500
-vector_path = "GLM_MATH500.gguf"
+vector_path = "GLM_MATH500_1000.gguf"
 
-num_question = 4
+num_question = 1000
 
 problem_list = []
 
@@ -86,12 +86,12 @@ def build_glm_prompt(q: str,
     # ——在 assistant 段刚开始处，按模式插入 think+seed（与老模板对齐）——
     if add_think_tag:
         if mode == "fast":
-            seed = "To"
+            seed = "To "
         elif mode == "slow":
-            seed = "Alright"
+            seed = "Alright, "
         else:
             seed = ""  # base 模式不强行加种子词
-        prompt += "<think>\n" + seed
+        prompt += "<THNIK>\n" + seed
 
     return prompt
 
@@ -108,9 +108,10 @@ llm_gen = LLM(
     task="generate",
     tensor_parallel_size=1,
     # 40G: 建议别开 eager，内存更吃紧；按需调高/调低利用率
-    enforce_eager=False,
+    enforce_eager=True,
     gpu_memory_utilization=0.90,
     trust_remote_code=True,
+    max_model_len=8192
 )
 gen_params = SamplingParams(
     temperature=0.0,
@@ -148,7 +149,7 @@ gc.collect()
 torch.cuda.empty_cache()
 
 
-llm_hs = LLM(model=model_path,task="reward",tensor_parallel_size=1,trust_remote_code=True,enforce_eager=True)
+llm_hs = LLM(model=model_path,task="reward",tensor_parallel_size=1,trust_remote_code=True,enforce_eager=True,    gpu_memory_utilization=0.90,max_model_len=8192)
 
 hidden_fast, _= get_all_hidden_states(llm_hs, qa_fast)
 hidden_slow, _= get_all_hidden_states(llm_hs, qa_slow)
@@ -161,46 +162,13 @@ assert n_layers > 0, "Failed to get hidden states."
 
 
 
-def second_paragraph_break_token_pos(text: str):
-    # 找第2个 "\n\n" 的字符区间
-    k = 0
-    start = -1
-    for i in range(len(text)-1):
-        if text[i:i+2] == "\n\n":
-            k += 1
-            if k == 2:
-                start = i
-                break
-    if start < 0:
-        return None
-
-    enc = tokenizer(
-        text, add_special_tokens=True,
-        return_offsets_mapping=True
-    )
-    # 找到“覆盖 start 字符”的 token 索引
-    for idx, (s, e) in enumerate(enc["offset_mapping"]):
-        if s <= start < e:
-            return idx
-    # 找不到就返回最后一个 token
-    return len(enc["input_ids"]) - 1
-
-# 逐样本计算 fast/slow 的锚点，并做边界保护
-def pick_pos_list(text_list):
-    pos_list = []
-    for t in text_list:
-        pos = second_paragraph_break_token_pos(t)
-        pos_list.append(pos)
-    return pos_list
-
-
 def first_answer_token_idx(prompt_str: str, answer_str: str, tokenizer) -> int:
     # 答案在整段里的字符边界：恰好是 prompt 的长度
     boundary = len(prompt_str)
 
     # 在 "prompt + answer" 一次性分词，保证与实际喂给 vLLM 的序列一致
     qa = prompt_str + answer_str
-    enc = tokenizer(qa, add_special_tokens=True, return_offsets_mapping=True)
+    enc = tokenizer(qa, add_special_tokens=False, return_offsets_mapping=True)
 
     # 找到覆盖边界字符的 token
     for t, (s, e) in enumerate(enc["offset_mapping"]):
@@ -240,9 +208,75 @@ slow_pos = [first_answer_token_idx(texts_slow[i], ans_slow[i], tokenizer)
             for i in range(len(qa_slow))]
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+# def second_paragraph_break_token_pos(text: str):
+#     # 找第2个 "\n\n" 的字符区间
+#     k = 0
+#     start = -1
+#     for i in range(len(text)-1):
+#         if text[i:i+2] == "\n\n":
+#             k += 1
+#             if k == 2:
+#                 start = i
+#                 break
+#     if start < 0:
+#         return None
+
+#     enc = tokenizer(
+#         text, add_special_tokens=True,
+#         return_offsets_mapping=True
+#     )
+#     # 找到“覆盖 start 字符”的 token 索引
+#     for idx, (s, e) in enumerate(enc["offset_mapping"]):
+#         if s <= start < e:
+#             return idx
+#     # 找不到就返回最后一个 token
+#     return len(enc["input_ids"]) - 1
+
+# # 逐样本计算 fast/slow 的锚点，并做边界保护
+# def pick_pos_list(text_list):
+#     pos_list = []
+#     for t in text_list:
+#         pos = second_paragraph_break_token_pos(t)
+#         pos_list.append(pos)
+#     return pos_list
+
+
+
+# fast_pos = pick_pos_list(qa_fast)
+# slow_pos = []
+# for i, t in enumerate(qa_slow):
+#     # 用与 fast 最接近长度的段落换行（如果 fast 没有，直接用 slow 的第二个）
+#     p = second_paragraph_break_token_pos(t)
+#     if p is None:
+#         slow_pos.append(p)
+#     else:
+#         slow_pos.append(p)
+
+
+
+
+
+
+
+
+
+
+
 import numpy as np, json
-import numpy as np
-import torch
+
 
 def _to_numpy_f32(x):
     # 把各种可能的类型都稳妥转成 numpy.float32 的一维向量
