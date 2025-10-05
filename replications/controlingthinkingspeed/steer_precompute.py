@@ -17,9 +17,9 @@ file_path = "/home/bingxing2/ailab/gaoyuanyuan_p/yuning/temp/test.jsonl" #GSM8K
 model_path = "/home/bingxing2/ailab/gaoyuanyuan_p/GLM-4.1V-9B-Thinking"
 
 # vector_path = "vectors/thinking_switch_pca_MATH-500.gguf" #MATH-500
-vector_path = "GLM_MATH500_1000.gguf"
+vector_path = "GLM_MATH500_20.gguf"
 
-num_question = 1000
+num_question = 20
 
 problem_list = []
 
@@ -91,7 +91,7 @@ def build_glm_prompt(q: str,
             seed = "Alright, "
         else:
             seed = ""  # base 模式不强行加种子词
-        prompt += "<THNIK>\n" + seed
+        prompt += "<think>" + seed
 
     return prompt
 
@@ -149,15 +149,7 @@ gc.collect()
 torch.cuda.empty_cache()
 
 
-llm_hs = LLM(model=model_path,task="reward",tensor_parallel_size=1,trust_remote_code=True,enforce_eager=True,    gpu_memory_utilization=0.90,max_model_len=8192)
 
-hidden_fast, _= get_all_hidden_states(llm_hs, qa_fast)
-hidden_slow, _= get_all_hidden_states(llm_hs, qa_slow)
-
-# finishing getting hidden state
-
-n_layers = len(hidden_fast[0])
-assert n_layers > 0, "Failed to get hidden states."
 
 
 
@@ -181,20 +173,8 @@ def first_answer_token_idx(prompt_str: str, answer_str: str, tokenizer) -> int:
     # 兜底：取最后一个 token（理论上不会走到）
     return len(enc["input_ids"]) - 1
 
-# def first_content_token_idx(prompt_str: str, answer_str: str, tokenizer) -> int:
-#     # 计算答案前缀空白（空格/制表/换行）长度
-#     ws = len(answer_str) - len(answer_str.lstrip())
-#     boundary = len(prompt_str) + ws
 
-#     qa = prompt_str + answer_str
-#     enc = tokenizer(qa, add_special_tokens=True, return_offsets_mapping=True)
-#     for t, (s, e) in enumerate(enc["offset_mapping"]):
-#         if s <= boundary < e:
-#             return t
-#         if boundary == e and t + 1 < len(enc["offset_mapping"]):
-#             return t + 1
-#     return len(enc["input_ids"]) - 1
-
+# not second
 
 # fast_pos = [first_answer_token_idx(texts_fast[i], ans_fast[i], tokenizer)
 #             for i in range(len(qa_fast))]
@@ -202,74 +182,53 @@ def first_answer_token_idx(prompt_str: str, answer_str: str, tokenizer) -> int:
 #             for i in range(len(qa_slow))]
 
 
-fast_pos = [first_answer_token_idx(texts_fast[i], ans_fast[i], tokenizer)
-            for i in range(len(qa_fast))]
-slow_pos = [first_answer_token_idx(texts_slow[i], ans_slow[i], tokenizer)
-            for i in range(len(qa_slow))]
 
 
 
 
+def second_paragraph_break_token_pos(text: str):
+    # 找第2个 "\n\n" 的字符区间
+    k = 0
+    start = -1
+    for i in range(len(text)-1):
+        if text[i:i+2] == "\n\n":
+            k += 1
+            if k == 2:
+                start = i
+                break
+    if start < 0:
+        return None
+
+    enc = tokenizer(
+        text, add_special_tokens=True,
+        return_offsets_mapping=True
+    )
+    # 找到“覆盖 start 字符”的 token 索引
+    for idx, (s, e) in enumerate(enc["offset_mapping"]):
+        if s <= start < e:
+            return idx
+    # 找不到就返回最后一个 token
+    return len(enc["input_ids"]) - 1
+
+# 逐样本计算 fast/slow 的锚点，并做边界保护
+def pick_pos_list(text_list):
+    pos_list = []
+    for t in text_list:
+        pos = second_paragraph_break_token_pos(t)
+        pos_list.append(pos)
+    return pos_list
 
 
 
-
-
-
-
-
-
-
-
-# def second_paragraph_break_token_pos(text: str):
-#     # 找第2个 "\n\n" 的字符区间
-#     k = 0
-#     start = -1
-#     for i in range(len(text)-1):
-#         if text[i:i+2] == "\n\n":
-#             k += 1
-#             if k == 2:
-#                 start = i
-#                 break
-#     if start < 0:
-#         return None
-
-#     enc = tokenizer(
-#         text, add_special_tokens=True,
-#         return_offsets_mapping=True
-#     )
-#     # 找到“覆盖 start 字符”的 token 索引
-#     for idx, (s, e) in enumerate(enc["offset_mapping"]):
-#         if s <= start < e:
-#             return idx
-#     # 找不到就返回最后一个 token
-#     return len(enc["input_ids"]) - 1
-
-# # 逐样本计算 fast/slow 的锚点，并做边界保护
-# def pick_pos_list(text_list):
-#     pos_list = []
-#     for t in text_list:
-#         pos = second_paragraph_break_token_pos(t)
-#         pos_list.append(pos)
-#     return pos_list
-
-
-
-# fast_pos = pick_pos_list(qa_fast)
-# slow_pos = []
-# for i, t in enumerate(qa_slow):
-#     # 用与 fast 最接近长度的段落换行（如果 fast 没有，直接用 slow 的第二个）
-#     p = second_paragraph_break_token_pos(t)
-#     if p is None:
-#         slow_pos.append(p)
-#     else:
-#         slow_pos.append(p)
-
-
-
-
-
-
+fast_pos = pick_pos_list(qa_fast)
+slow_pos = []
+for i, t in enumerate(qa_slow):
+    # 用与 fast 最接近长度的段落换行（如果 fast 没有，直接用 slow 的第二个）
+    p = second_paragraph_break_token_pos(t)
+    if p is None:
+        slow_pos.append(p)
+    else:
+        slow_pos.append(p)
 
 
 
@@ -305,6 +264,15 @@ def safe_pick(hs_layers, token_idx):
     return out
 
 
+llm_hs = LLM(model=model_path,task="reward",tensor_parallel_size=1,trust_remote_code=True,enforce_eager=True,    gpu_memory_utilization=0.90,max_model_len=8192)
+
+hidden_fast, _= get_all_hidden_states(llm_hs, qa_fast)
+hidden_slow, _= get_all_hidden_states(llm_hs, qa_slow)
+
+# finishing getting hidden state
+
+n_layers = len(hidden_fast[0])
+assert n_layers > 0, "Failed to get hidden states."
 
 
 all_hidden_states = []
@@ -318,53 +286,6 @@ N = len(qa_fast)
 
 positive_indices = list(range(0, N))     # fast
 negative_indices = list(range(N, 2*N))   # slow
-
-# save data
-
-
-# def pack_all_hidden_states(all_hidden_states):
-#     # all_hidden_states: List[N] of List[L] of List[1] of numpy.float32 (H,)
-#     N = len(all_hidden_states)
-#     L = len(all_hidden_states[0])
-#     H = all_hidden_states[0][0][0].shape[-1]
-#     arr = np.empty((N, L, 1, H), dtype=np.float32)
-#     for i in range(N):
-#         for l in range(L):
-#             arr[i, l, 0, :] = all_hidden_states[i][l][0]  # 已是 numpy.float32
-#     return arr
-
-# arr = pack_all_hidden_states(all_hidden_states)
-
-# meta = {
-#     "model_path": model_path,
-#     "model_type": "glm",             # 和提取时一致
-#     "method": "center",
-#     "normalize": False,
-#     "layer_count": int(arr.shape[1]),
-#     "hidden_dim": int(arr.shape[3]),
-#     "anchor": "second_paragraph_break",  # 你的锚点规则，可自定义
-#     "token_pos": -1,                     # 虽然不用，但记录一下
-# }
-
-# np.savez_compressed(
-#     "hs_dump_glm9b_slowfast.npz",
-#     all_hidden_states=arr.astype(np.float16),  # 省空间：float16
-#     positive_indices=np.asarray(positive_indices, dtype=np.int32),
-#     negative_indices=np.asarray(negative_indices, dtype=np.int32),
-#     meta=json.dumps(meta, ensure_ascii=False)
-# )
-
-# print("Saved to hs_dump_glm9b_slowfast.npz:",
-#       arr.shape, "float32")
-
-
-
-
-
-
-
-
-
 
 
 

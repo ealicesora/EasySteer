@@ -3,3 +3,4 @@ __pycache__/
 /temp/
 easysteer.egg-info/
 replications/controlingthinkingspeed/hs_dump_glm9b_slowfast.npz
+replications/controlingthinkingspeed/*.txt

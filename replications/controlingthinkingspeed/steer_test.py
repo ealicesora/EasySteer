@@ -7,7 +7,7 @@ from vllm import LLM, SamplingParams
 model_path = "/home/bingxing2/ailab/gaoyuanyuan_p/GLM-4.1V-9B-Thinking"
 
 # vector_path = "vectors/thinking_switch_pca_MATH-500.gguf" #MATH-500
-vector_path = "./GLM_MATH500.gguf"
+vector_path = "./GLM_MATH500_20.gguf"
 
 from transformers import AutoTokenizer
 tokenizer = AutoTokenizer.from_pretrained(
@@ -25,10 +25,10 @@ steer_vector_request_pos = SteerVectorRequest(
             steer_vector_name="fast",
             steer_vector_id=1,
             steer_vector_local_path=vector_path,
-            scale=8.0,
-            target_layers=list(range(19,29)),
-            # prefill_trigger_tokens=[-1],
-            # prefill_trigger_positions=[-1],
+            scale=4.0,
+            target_layers=list(range(19,39)),
+            prefill_trigger_tokens=[-1],
+            prefill_trigger_positions=[-1],
             generate_trigger_tokens=[-1],
             debug=False,
             algorithm='direct'
@@ -37,10 +37,10 @@ steer_vector_request_neg = SteerVectorRequest(
             steer_vector_name="slow",
             steer_vector_id=2,
             steer_vector_local_path=vector_path,
-            scale=-8.0,
-            target_layers=list(range(19,29)),
-            # prefill_trigger_tokens=[-1],
-            # prefill_trigger_positions=[-1],
+            scale=-4.0,
+            target_layers=list(range(19,39)),
+            prefill_trigger_tokens=[-1],
+            prefill_trigger_positions=[-1],
             generate_trigger_tokens=[-1],
             debug=False,
             algorithm='direct'
