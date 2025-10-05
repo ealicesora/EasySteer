@@ -150,6 +150,9 @@ class HiddenStatesCapture:
             samples_hidden_states[sample_idx][layer_idx]
         """
         if not all_hidden_states or not outputs:
+            print("No hidden states or outputs to split.")
+            print("Hidden states:", len(all_hidden_states))
+            print("Outputs:",  len(outputs))
             return []
         
         # Try to get sample lengths from adapter

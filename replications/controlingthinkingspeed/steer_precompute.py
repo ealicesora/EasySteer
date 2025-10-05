@@ -19,7 +19,7 @@ model_path = "/home/bingxing2/ailab/gaoyuanyuan_p/GLM-4.1V-9B-Thinking"
 # vector_path = "vectors/thinking_switch_pca_MATH-500.gguf" #MATH-500
 vector_path = "GLM_MATH500_20.gguf"
 
-num_question = 20
+num_question = 32
 
 problem_list = []
 
@@ -111,7 +111,7 @@ llm_gen = LLM(
     enforce_eager=True,
     gpu_memory_utilization=0.90,
     trust_remote_code=True,
-    max_model_len=8192
+    max_model_len=8192 
 )
 gen_params = SamplingParams(
     temperature=0.0,
@@ -142,6 +142,35 @@ ans_slow = [o.outputs[0].text for o in answers_slow]
 qa_slow  = [texts_slow[i] + ans_slow[i] for i in range(len(texts_slow))]
 
 
+# ===  统计 fast / slow 的生成 token 数 ===
+import numpy as np
+
+def count_tokens_list(texts, tokenizer, exclude_special=False):
+    """统计每条文本的 token 数；
+       exclude_special=True 时会尽量去掉 special token（若有 special_tokens_mask）"""
+    counts = []
+    for t in texts:
+        enc = tokenizer(t, add_special_tokens=False, return_special_tokens_mask=True)
+        ids = enc["input_ids"]
+        if exclude_special and "special_tokens_mask" in enc:
+            ids = [tid for tid, m in zip(ids, enc["special_tokens_mask"]) if m == 0]
+        counts.append(len(ids))
+    return np.array(counts, dtype=np.int32)
+
+fast_tok = count_tokens_list(ans_fast, tokenizer, exclude_special=False)
+slow_tok = count_tokens_list(ans_slow, tokenizer, exclude_special=False)
+
+def _summary(arr):
+    return (f"mean={arr.mean():.1f}, median={np.median(arr):.0f}, "
+            f"std={arr.std():.1f}, min={arr.min()}, max={arr.max()}, n={len(arr)}")
+
+print("\n[Token stats]")
+print("FAST :", _summary(fast_tok))
+print("SLOW :", _summary(slow_tok))
+diff = slow_tok - fast_tok
+print("Δ(SLOW-FAST):", _summary(diff))
+
+
 
 
 del llm_gen, answers_fast, answers_slow
@@ -149,6 +178,50 @@ gc.collect()
 torch.cuda.empty_cache()
 
 
+
+
+# === 2) “阶段”预览：找到答案内的第2个 "\n\n"，展示位置并打印截断前/后的文本 ===
+def second_break_char_and_token(answer: str):
+    """返回：(char_idx, token_idx_in_answer)；找不到则 (None, None)"""
+    first = answer.find("\n\n")
+    if first == -1:
+        return None, None
+    second = answer.find("\n\n", first + 2)
+    if second == -1:
+        return None, None
+
+    # 将字符位置映射到“答案自身”的 token 索引
+    enc = tokenizer(answer, add_special_tokens=False, return_offsets_mapping=True)
+    tok_idx = None
+    for t, (s, e) in enumerate(enc["offset_mapping"]):
+        if s <= second < e:
+            tok_idx = t
+            break
+        if second == e and t + 1 < len(enc["offset_mapping"]):
+            tok_idx = t + 1
+            break
+    return second, tok_idx
+
+def preview_stage(idx: int, which: str = "fast"):
+    """打印第 idx 个样本（fast/slow）的完整回答与“阶段”回答"""
+    prompt = texts_fast[idx] if which == "fast" else texts_slow[idx]
+    answer = ans_fast[idx] if which == "fast" else ans_slow[idx]
+    char_idx, tok_idx = second_break_char_and_token(answer)
+    print(f"\n=== [{which.upper()}] sample #{idx} ===")
+    print("Question:", problem_list[idx])
+    if char_idx is None:
+        print("No second paragraph break found; showing full answer.\n")
+        print(answer)
+        return
+    print(f"Second break -> char={char_idx}, token={tok_idx}")
+    print("\n--- FULL ANSWER ---")
+    print(answer)
+    print("\n--- TRUNCATED (until 2nd \\n\\n) ---")
+    print(answer[:char_idx])
+
+# # Demo：查看第 0 个样本的 fast / slow
+# preview_stage(0, "fast")
+# preview_stage(0, "slow")
 
 
 
@@ -230,6 +303,102 @@ for i, t in enumerate(qa_slow):
     else:
         slow_pos.append(p)
 
+# （可选）看看有多少样本找到了“第二个段落分隔”的锚点
+print(f"Anchor coverage - FAST: {sum(p is not None for p in fast_pos)}/{len(fast_pos)}")
+print(f"Anchor coverage - SLOW: {sum(p is not None for p in slow_pos)}/{len(slow_pos)}")
+
+
+
+
+# ===== INSERT: 抽隐层专用短版 QA + 锚点 =====
+MAX_TOK_HS = 4096   # 抽隐层的 token 上限（可改 2048/3072）
+SAFETY     = 64     # 预留安全余量，避免刚好顶到上限
+
+def _second_break_char(answer: str):
+    first = answer.find("\n\n")
+    if first == -1:
+        return None
+    second = answer.find("\n\n", first + 2)
+    return None if second == -1 else second
+
+def _boundary_token_idx(qa: str, boundary_char: int, tokenizer) -> int:
+    """
+    在单次分词(qa)上，把字符边界 boundary_char 映射到 token 索引。
+    与你 first_answer_token_idx 的写法一致，但作用在任意边界。
+    """
+    enc = tokenizer(qa, add_special_tokens=False, return_offsets_mapping=True)
+    # 保护：空序列~
+    if len(enc["input_ids"]) == 0:
+        return 0
+    for t, (s, e) in enumerate(enc["offset_mapping"]):
+        if s <= boundary_char < e:
+            return t
+        if boundary_char == e and t + 1 < len(enc["offset_mapping"]):
+            return t + 1
+    return len(enc["input_ids"]) - 1
+
+def _truncate_qa_and_anchor(prompt: str, answer: str, tokenizer,
+                            prefer_second_break: bool = True,
+                            max_tokens: int = MAX_TOK_HS, safety: int = SAFETY):
+    """
+    返回：(qa_hs, anchor_tok_idx)
+      - 先按“第二段分隔”截答案（若存在）
+      - 然后拼 prompt 检查 token 上限；若超上限则二次截断到上限
+      - 锚点 token：在“截断边界”处（段落截则是段落边界；上限截则是序列末端）
+    """
+    # 1) 先在答案里找“第二段落分隔”
+    ans_part = answer
+    second_ci = _second_break_char(answer) if prefer_second_break else None
+    if second_ci is not None:
+        ans_part = answer[:second_ci]
+
+    # 2) 组成短版 qa，并检查 token 上限
+    qa = prompt + ans_part
+    enc = tokenizer(qa, add_special_tokens=False, return_offsets_mapping=True)
+    ids = enc["input_ids"]
+    cap = max_tokens - safety
+
+    # 锚点字符边界（尚未考虑上限二次截断）
+    boundary_char = len(prompt) + len(ans_part)
+
+    if cap > 0 and len(ids) > cap:
+        # 发生了“上限截断”，锚点就是最后一个 token
+        ids = ids[:cap]
+        qa = tokenizer.decode(ids, skip_special_tokens=False, clean_up_tokenization_spaces=False)
+        anchor_tok_idx = len(ids) - 1
+    else:
+        # 没到上限：锚点 = 段落边界处对应的 token
+        anchor_tok_idx = _boundary_token_idx(qa, boundary_char, tokenizer)
+
+    return qa, anchor_tok_idx
+
+def build_hs_pack(text_prompts, answers, tokenizer,
+                  prefer_second_break=True, max_tokens=MAX_TOK_HS, safety=SAFETY):
+    qa_hs = []
+    pos_hs = []
+    for i in range(len(text_prompts)):
+        qa_i, pos_i = _truncate_qa_and_anchor(text_prompts[i], answers[i], tokenizer,
+                                              prefer_second_break, max_tokens, safety)
+        qa_hs.append(qa_i)
+        pos_hs.append(pos_i)
+    return qa_hs, pos_hs
+
+
+
+# # —— 用在 fast/slow 上 —— #
+# qa_fast, fast_pos = build_hs_pack(texts_fast, ans_fast, tokenizer)
+# qa_slow, slow_pos = build_hs_pack(texts_slow, ans_slow, tokenizer)
+
+# # 可选：看长度分布
+# def _toklen(t): 
+#     return len(tokenizer(t, add_special_tokens=False)["input_ids"])
+# fast_hs_len = np.array([_toklen(t) for t in qa_fast], dtype=np.int32)
+# slow_hs_len = np.array([_toklen(t) for t in qa_slow], dtype=np.int32)
+# print(f"[HS-short] fast mean={fast_hs_len.mean():.1f}, max={fast_hs_len.max()}, n={len(fast_hs_len)}")
+# print(f"[HS-short] slow mean={slow_hs_len.mean():.1f}, max={slow_hs_len.max()}, n={len(slow_hs_len)}")
+
+# del fast_hs_len,slow_hs_len
+
 
 
 
@@ -251,6 +420,7 @@ def safe_pick(hs_layers, token_idx):
     """hs_layers: List[layer]，每个元素是 List[seq_len] 的向量(通常是 torch.Tensor)
        返回形状：List[layer][1][H]，且最里层是 numpy.float32
     """
+    # print('picking'+str(len(hs_layers[0]))+' '+str(token_idx))
     seq_len = len(hs_layers[0])
     if token_idx is None:
         token_idx = seq_len - 1
@@ -266,26 +436,72 @@ def safe_pick(hs_layers, token_idx):
 
 llm_hs = LLM(model=model_path,task="reward",tensor_parallel_size=1,trust_remote_code=True,enforce_eager=True,    gpu_memory_utilization=0.90,max_model_len=8192)
 
-hidden_fast, _= get_all_hidden_states(llm_hs, qa_fast)
-hidden_slow, _= get_all_hidden_states(llm_hs, qa_slow)
-
-# finishing getting hidden state
-
-n_layers = len(hidden_fast[0])
-assert n_layers > 0, "Failed to get hidden states."
-
-
+directcollect = False
 all_hidden_states = []
-for i in range(len(qa_fast)):
-    all_hidden_states.append(safe_pick(hidden_fast[i], fast_pos[i]))
-for i in range(len(qa_slow)):
-    all_hidden_states.append(safe_pick(hidden_slow[i], slow_pos[i]))
+if directcollect:
+    hidden_fast, _= get_all_hidden_states(llm_hs, qa_fast)
+    hidden_slow, _= get_all_hidden_states(llm_hs, qa_slow)
+
+    # finishing getting hidden state
+
+    n_layers = len(hidden_fast[0])
+    assert n_layers > 0, "Failed to get hidden states."
+
+
+    
+    for i in range(len(qa_fast)):
+        all_hidden_states.append(safe_pick(hidden_fast[i], fast_pos[i]))
+    for i in range(len(qa_slow)):
+        all_hidden_states.append(safe_pick(hidden_slow[i], slow_pos[i]))
+
+    
+else:
+    BATCH = 8  # 或 4/16，视内存而定
+
+    fast_idx_list, slow_idx_list = [], []
+    all_hidden_states = []
+
+    def collect(which, hs_list, pos_list):
+        # which: "fast" or "slow"
+        for i in range(len(hs_list)):
+            all_hidden_states.append(safe_pick(hs_list[i], pos_list[i]))
+            if which == "fast":
+                fast_idx_list.append(len(all_hidden_states) - 1)
+            else:
+                slow_idx_list.append(len(all_hidden_states) - 1)
+        del hs_list[:]
+        gc.collect(); torch.cuda.empty_cache()
+
+    # --- fast ---
+    for s in range(0, len(qa_fast), BATCH):
+        chunk = qa_fast[s:s+BATCH]
+        hs_chunk, _ = get_all_hidden_states(llm_hs, chunk, split_by_samples=True)
+        for i in range(30):
+            if len(chunk) != len(hs_chunk):
+                print(f"[warn] retry {i} times for batch {s}-{s+len(chunk)}")
+                hs_chunk, _ = get_all_hidden_states(llm_hs, chunk, split_by_samples=True)
+        print(f"[diag] fast batch {s}-{s+len(chunk)}: want={len(chunk)} got={len(hs_chunk)}")
+        collect("fast",hs_chunk, fast_pos[s:s+BATCH])
+
+    # --- slow ---
+    for s in range(0, len(qa_slow), BATCH):
+        chunk = qa_slow[s:s+BATCH]
+        hs_chunk, _ = get_all_hidden_states(llm_hs, chunk, split_by_samples=True)
+        print(f"[diag] fast batch {s}-{s+len(chunk)}: want={len(chunk)} got={len(hs_chunk)}")
+        collect("slow",hs_chunk, slow_pos[s:s+BATCH])
 
 N = len(qa_fast)
 
+positive_indices = list(range(N, 2*N))    # fast
+negative_indices = list(range(0, N))   # slow
 
-positive_indices = list(range(0, N))     # fast
-negative_indices = list(range(N, 2*N))   # slow
+print(f"[diag] problems={len(problem_list)} "
+      f"qa_fast={len(qa_fast)} qa_slow={len(qa_slow)}")
+
+
+# 收集完：
+print(f"[diag] collected fast={len(fast_idx_list)} slow={len(slow_idx_list)} "
+      f"total={len(all_hidden_states)}")
 
 
 
@@ -294,7 +510,7 @@ control_vector = extract_pca_control_vector(
     positive_indices=positive_indices,
     negative_indices=negative_indices,
     model_type="glm",     # <--- 不要再用 "qwen2.5"
-    method="center",
+    method="diff_bid", # center
     token_pos=-1,         # 我们已经在 all_hidden_states 里把 seq 砍到 1 了，这里不会再用到
     normalize=False
 )
@@ -316,93 +532,3 @@ control_vector = StatisticalControlVector.import_gguf(vector_path)
 print(control_vector)
 
 
-
-
-# from transformers import AutoTokenizer
-
-# # Initialize tokenizer
-# tokenizer = AutoTokenizer.from_pretrained(
-#     model_path, trust_remote_code=True, use_fast=True
-# )
-# # tokenizer = AutoTokenizer.from_pretrained("/home/bingxing2/ailab/gaoyuanyuan_p/GLM-4.1V-9B-Thinking")
-
-# # The newline token suffix in tokenizer vocabulary
-# target_suffix = "ĊĊ"  # "\n\n" is tokenized as "ĊĊ"
-
-# all_hidden_states=[]
-# # Process each QA pair to find newline positions
-# fast_token = []
-# fast_positions = []
-# for i,answer in enumerate(qa_pairs_fast):
-#     # Tokenize the QA pair
-#     tokens = tokenizer.tokenize(answer, add_special_tokens=True)
-#     fast_token.append(tokens)
-    
-#     # Find all positions of "ĊĊ" in the tokens
-#     # These represent potential paragraph breaks in the text
-#     positions = [
-#         i for i, token in enumerate(tokens) 
-#         if isinstance(token, str) and token.endswith(target_suffix)
-#     ]
-#     second_position = positions[1] if len(positions) > 1 else None
-#     fast_positions.append(second_position)
-#     print(len(hidden_states_fast[i][0]))
-    
-#     all_hidden_states.append([
-#         [hidden_states_fast[i][layer][second_position]]  # 注意这里多加了一层方括号
-#         for layer in range(28)
-#     ])
-#     # all_hidden_states.append([
-#     #     hidden_states_slow[i][layer][second_position]
-#     #     for layer in range(19, 28)
-#     # ])
-
-# # Process slow-thinking responses to find truncation positions
-# slow_tokens = []
-# slow_truncation_positions = []
-# for i, answer in enumerate(qa_pairs_slow):
-#     # Tokenize the response
-#     tokens = tokenizer.tokenize(answer, add_special_tokens=True)
-#     slow_tokens.append(tokens)
-    
-#     # Get the corresponding slow-thinking second position
-#     fast_second_pos = fast_positions[i]
-    
-#     # if fast_second_pos is None:
-#     #     slow_truncation_positions.append(None)
-#     #     continue
-    
-#     # Find all positions of "ĊĊ" in slow-thinking response
-#     slow_positions = [
-#         j for j, token in enumerate(tokens) 
-#         if isinstance(token, str) and token.endswith(target_suffix)
-#     ]
-    
-#     # if not slow_positions:
-#     #     slow_truncation_positions.append(None)
-#     #     continue
-    
-#     # Find the position with nearest length to fast-thinking response
-#     closest_position = min(slow_positions, key=lambda x: abs(x - fast_second_pos))
-#     slow_truncation_positions.append(closest_position)
-    
-#     all_hidden_states.append([
-#         [hidden_states_slow[i][layer][closest_position]]  # 注意这里多加了一层方括号
-#         for layer in range(28)
-#     ])
-
-
-
-# control_vector = extract_pca_control_vector(
-#     all_hidden_states=all_hidden_states,
-#     positive_indices=list(range(num_question)), 
-#     negative_indices=list(range(num_question,2*num_question)),
-#     model_type="qwen2.5",
-#     method="center",
-#     token_pos=-1,
-#     normalize=False
-# )
-
-# control_vector.export_gguf(vector_path)
-# control_vector = StatisticalControlVector.import_gguf(vector_path)
-# print(control_vector)

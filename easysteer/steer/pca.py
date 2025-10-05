@@ -151,8 +151,52 @@ class PCAExtractor:
                 
                 logger.info(f"Layer {layer}: PCA on differences explains {variance_explained:.5%} of the variance")
 
+            elif method == "diff_bid":
+                # 双向差分PCA（需要正负样本）：同时使用 (pos - neg) 与 (neg - pos)
+                pos_activations = positive_hiddens[layer]  # [n_pos, hidden_dim]
+                neg_activations = negative_hiddens[layer]  # [n_neg, hidden_dim]
+
+                min_samples = min(len(pos_activations), len(neg_activations))
+                pos_activations = pos_activations[:min_samples]
+                neg_activations = neg_activations[:min_samples]
+                
+                differences = []
+
+                # 成对双向差分
+                for i in range(min_samples):
+                    p = pos_activations[i]
+                    n = neg_activations[i]
+                    differences.append(p - n)  # d(-→+)：pos - neg
+                    differences.append(n - p)  # d(+→-)：neg - pos
+
+                # 处理“多出来的一侧”：使用另一侧均值做双向差分
+                if len(pos_activations) > min_samples:
+                    neg_mean = np.mean(neg_activations, axis=0)
+                    for i in range(min_samples, len(pos_activations)):
+                        p = pos_activations[i]
+                        differences.append(p - neg_mean)
+                        differences.append(neg_mean - p)
+
+                if len(neg_activations) > min_samples:
+                    pos_mean = np.mean(pos_activations, axis=0)
+                    for i in range(min_samples, len(neg_activations)):
+                        n = neg_activations[i]
+                        differences.append(pos_mean - n)
+                        differences.append(n - pos_mean)
+
+                all_activations = np.vstack(differences)
+
+                # 对双向差分集合执行PCA
+                pca = PCA(n_components=1)
+                pca.fit(all_activations)
+
+                first_component = pca.components_[0]
+                variance_explained = pca.explained_variance_ratio_[0]
+
+                logger.info(f"Layer {layer}: PCA on bidirectional differences explains {variance_explained:.5%} of the variance")
+
             # 向量方向校正（确保方向从负样本指向正样本）
-            if correct_direction and method in ["diff", "center"]:
+            if correct_direction and method in ["diff", "center","diff_bid"]:
                 pos_activations_layer = positive_hiddens[layer]
                 neg_activations_layer = negative_hiddens[layer]
 
