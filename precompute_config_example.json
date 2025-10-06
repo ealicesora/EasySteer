@@ -1,0 +1,7 @@
+{
+  "model_path": "/home/bingxing2/ailab/gaoyuanyuan_p/GLM-4.1V-9B-Thinking",
+  "vector_path": "./GLM_MATH500_fix_center_alright_256.gguf",
+  "data_file": "/home/bingxing2/ailab/gaoyuanyuan_p/yuning/temp/test.jsonl",
+  "num_question": 256,
+  "pca_method": "center"
+}

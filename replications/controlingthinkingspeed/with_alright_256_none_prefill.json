@@ -1,0 +1,14 @@
+{
+  "model_path": "/home/bingxing2/ailab/gaoyuanyuan_p/GLM-4.1V-9B-Thinking",
+  "base_path": "./GLM_MATH500_fix_center_with_alright_256_prefill/",
+  "vector_path": "/used.gguf",
+  "data_file": "/home/bingxing2/ailab/gaoyuanyuan_p/yuning/temp/GSM8k.jsonl",
+  "num_question": 256,
+  "pca_method": "center",
+  "slow_prefix": "Alright",
+  "save_dir": "/results_none_prefill",
+  "test_layers": [18, 28],
+  "test_scales": [2.0, 4.0, -2.0, -4.0],
+  "use_prefill_trigger": false,
+  "prompt": "Darrell and Allen's ages are in the ratio of 7:11. If their total age now is 162, calculate Allen's age 10 years from now."
+}

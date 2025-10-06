@@ -1,0 +1,36 @@
+================================================================================
+SUMMARY: Output Length by Layer and Scale
+================================================================================
+
+Prompt: Darrell and Allen's ages are in the ratio of 7:11. If their total age now is 162, calculate Allen's age 10 years from now.
+
+Total tests: 9
+Tested layers: 18-28
+Tested scales: [2.0, 4.0, -2.0, -4.0]
+
+--------------------------------------------------------------------------------
+Layer     Scale     Output Length (tokens)   
+--------------------------------------------------------------------------------
+baseline  0.0       656                      
+18        2.0       913                      
+18        4.0       744                      
+18        -2.0      656                      
+18        -4.0      725                      
+28        2.0       648                      
+28        4.0       781                      
+28        -2.0      731                      
+28        -4.0      703                      
+--------------------------------------------------------------------------------
+
+STATISTICS:
+Baseline output length: 656 tokens
+
+Average output length by scale:
+  Scale   2.0: 780.5 tokens (avg)
+  Scale   4.0: 762.5 tokens (avg)
+  Scale  -2.0: 693.5 tokens (avg)
+  Scale  -4.0: 714.0 tokens (avg)
+
+Average output length by layer:
+  Layer 18: 759.5 tokens (avg)
+  Layer 28: 715.8 tokens (avg)
