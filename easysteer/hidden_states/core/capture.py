@@ -47,7 +47,6 @@ class HiddenStatesCapture:
         
         # Check if already wrapped
         if model_id in self._wrapped_models:
-            print('checked')
             return
         
         # Get layer pattern

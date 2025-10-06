@@ -6,8 +6,11 @@ from vllm import LLM, SamplingParams
 
 model_path = "/home/bingxing2/ailab/gaoyuanyuan_p/GLM-4.1V-9B-Thinking"
 
+os.environ["VLLM_USE_V1"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+
 # vector_path = "vectors/thinking_switch_pca_MATH-500.gguf" #MATH-500
-vector_path = "./GLM_MATH500_20.gguf"
+vector_path = "/home/bingxing2/ailab/gaoyuanyuan_p/yuning/EasySteer/replications/controlingthinkingspeed/GLM_MATH500_1024.gguf"
 
 from transformers import AutoTokenizer
 tokenizer = AutoTokenizer.from_pretrained(
@@ -26,7 +29,7 @@ steer_vector_request_pos = SteerVectorRequest(
             steer_vector_id=1,
             steer_vector_local_path=vector_path,
             scale=4.0,
-            target_layers=list(range(19,38)),
+            target_layers=list(range(29,37)),
             # prefill_trigger_tokens=[-1],
             # prefill_trigger_positions=[-1],
             generate_trigger_tokens=[-1],
@@ -38,7 +41,7 @@ steer_vector_request_neg = SteerVectorRequest(
             steer_vector_id=2,
             steer_vector_local_path=vector_path,
             scale=-4.0,
-            target_layers=list(range(19,38)),
+            target_layers=list(range(29,37)),
             # prefill_trigger_tokens=[-1],
             # prefill_trigger_positions=[-1],
             generate_trigger_tokens=[-1],
@@ -46,7 +49,7 @@ steer_vector_request_neg = SteerVectorRequest(
             algorithm='direct'
         )
 
-sampling_params = SamplingParams(temperature=0.0,max_tokens=2048)
+sampling_params = SamplingParams(temperature=0.0,max_tokens=1024)
 # prompt_template = "<|User|>Return your final response within \\boxed{}.\n%s<|Assistant|><think>\n"
 # # prompt = "Find the constant term in the expansion of $$\\left(10x^3-\\frac{1}{2x^2}\\right)^{5}$$"
 

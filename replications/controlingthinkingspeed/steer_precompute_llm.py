@@ -8,18 +8,18 @@ from easysteer.steer import extract_pca_control_vector,StatisticalControlVector
 from transformers import AutoTokenizer
 import torch, gc
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 os.environ["VLLM_USE_V1"] = "0"
 
 # file_path = "../../temp/test.jsonl" #MATH-500
 file_path = "/home/bingxing2/ailab/gaoyuanyuan_p/yuning/temp/test.jsonl" #GSM8K
 
-model_path = "/home/bingxing2/ailab/gaoyuanyuan_p/GLM-4.1V-9B-Thinking"
+model_path = "Qwen/Qwen2.5-1.5B-Instruct"
 
 # vector_path = "vectors/thinking_switch_pca_MATH-500.gguf" #MATH-500
-vector_path = "GLM_MATH500_1024_alright.gguf"
+vector_path = "GLM_MATH500_llm.gguf"
 
-num_question = 1024
+num_question = 32
 
 problem_list = []
 
@@ -89,7 +89,7 @@ def build_glm_prompt(q: str,
             seed = "To "
         elif mode == "slow":
             seed = ""
-            seed = "Alright, "
+            # seed = "Alright, "
         else:
             seed = ""  # base 模式不强行加种子词
         prompt += "<think>" + seed
@@ -459,7 +459,7 @@ if directcollect:
 
     
 else:
-    BATCH = 32  # 或 4/16，视内存而定
+    BATCH = 1  # 或 4/16，视内存而定
 
     fast_idx_list, slow_idx_list = [], []
     all_hidden_states = []
