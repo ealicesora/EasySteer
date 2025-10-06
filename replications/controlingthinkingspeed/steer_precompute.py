@@ -205,49 +205,49 @@ def main(config_path):
     
     
     
+    # not using this version
+    # # === 2) “阶段”预览：找到答案内的第2个 "\n\n"，展示位置并打印截断前/后的文本 ===
+    # def second_break_char_and_token(answer: str):
+    #     """返回：(char_idx, token_idx_in_answer)；找不到则 (None, None)"""
+    #     first = answer.find("\n\n")
+    #     if first == -1:
+    #         return None, None
+    #     second = answer.find("\n\n", first + 2)
+    #     if second == -1:
+    #         return None, None
     
-    # === 2) “阶段”预览：找到答案内的第2个 "\n\n"，展示位置并打印截断前/后的文本 ===
-    def second_break_char_and_token(answer: str):
-        """返回：(char_idx, token_idx_in_answer)；找不到则 (None, None)"""
-        first = answer.find("\n\n")
-        if first == -1:
-            return None, None
-        second = answer.find("\n\n", first + 2)
-        if second == -1:
-            return None, None
+    #     # 将字符位置映射到“答案自身”的 token 索引
+    #     enc = tokenizer(answer, add_special_tokens=True, return_offsets_mapping=True)
+    #     tok_idx = None
+    #     for t, (s, e) in enumerate(enc["offset_mapping"]):
+    #         if s <= second < e:
+    #             tok_idx = t
+    #             break
+    #         if second == e and t + 1 < len(enc["offset_mapping"]):
+    #             tok_idx = t + 1
+    #             break
+    #     return second, tok_idx
     
-        # 将字符位置映射到“答案自身”的 token 索引
-        enc = tokenizer(answer, add_special_tokens=True, return_offsets_mapping=True)
-        tok_idx = None
-        for t, (s, e) in enumerate(enc["offset_mapping"]):
-            if s <= second < e:
-                tok_idx = t
-                break
-            if second == e and t + 1 < len(enc["offset_mapping"]):
-                tok_idx = t + 1
-                break
-        return second, tok_idx
+    # def preview_stage(idx: int, which: str = "fast"):
+    #     """打印第 idx 个样本（fast/slow）的完整回答与“阶段”回答"""
+    #     prompt = texts_fast[idx] if which == "fast" else texts_slow[idx]
+    #     answer = ans_fast[idx] if which == "fast" else ans_slow[idx]
+    #     char_idx, tok_idx = second_break_char_and_token(answer)
+    #     print(f"\n=== [{which.upper()}] sample #{idx} ===")
+    #     print("Question:", problem_list[idx])
+    #     if char_idx is None:
+    #         print("No second paragraph break found; showing full answer.\n")
+    #         print(answer)
+    #         return
+    #     print(f"Second break -> char={char_idx}, token={tok_idx}")
+    #     print("\n--- FULL ANSWER ---")
+    #     print(answer)
+    #     print("\n--- TRUNCATED (until 2nd \\n\\n) ---")
+    #     print(answer[:char_idx])
     
-    def preview_stage(idx: int, which: str = "fast"):
-        """打印第 idx 个样本（fast/slow）的完整回答与“阶段”回答"""
-        prompt = texts_fast[idx] if which == "fast" else texts_slow[idx]
-        answer = ans_fast[idx] if which == "fast" else ans_slow[idx]
-        char_idx, tok_idx = second_break_char_and_token(answer)
-        print(f"\n=== [{which.upper()}] sample #{idx} ===")
-        print("Question:", problem_list[idx])
-        if char_idx is None:
-            print("No second paragraph break found; showing full answer.\n")
-            print(answer)
-            return
-        print(f"Second break -> char={char_idx}, token={tok_idx}")
-        print("\n--- FULL ANSWER ---")
-        print(answer)
-        print("\n--- TRUNCATED (until 2nd \\n\\n) ---")
-        print(answer[:char_idx])
-    
-    # # Demo：查看第 0 个样本的 fast / slow
-    preview_stage(0, "fast")
-    preview_stage(0, "slow")
+    # # # Demo：查看第 0 个样本的 fast / slow
+    # preview_stage(0, "fast")
+    # preview_stage(0, "slow")
     
     
     
@@ -299,21 +299,25 @@ def main(config_path):
             slow_pos_preview.append(p)
     
     # （可选）看看有多少样本找到了“第二个段落分隔”的锚点
-    print(f"Anchor coverage - FAST: {sum(p is not None for p in fast_pos)}/{len(fast_pos_preview)}")
-    print(f"Anchor coverage - SLOW: {sum(p is not None for p in slow_pos)}/{len(slow_pos_preview)}")
+    print(f"Anchor coverage - FAST: {sum(p is not None for p in fast_pos_preview)}/{len(fast_pos_preview)}")
+    print(f"Anchor coverage - SLOW: {sum(p is not None for p in slow_pos_preview)}/{len(slow_pos_preview)}")
     
     
     
-    # ===== 抽隐层专用短版 QA + 锚点（与论文对齐：slow 取与 fast 初始段最接近长度） =====
-    MAX_TOK_HS = 4096   # 抽隐层 token 上限（含 prompt+初始段）
-    SAFETY     = 64     # 预留余量，避免刚好顶到上限导致偏差或引擎侧 pack 差异
+    # ===== 抽隐层专用短版 QA + 锚点（论文对齐 + 自检） =====
+    MAX_TOK_HS = 4096
+    SAFETY     = 64   # 预留余量，避免刚好顶到上限导致引擎侧再截断
+
+    def _norm_newlines(s: str) -> str:
+        # 统一换行，避免 CRLF 影响 '\n\n' 检测
+        return s.replace("\r\n", "\n")
 
     def _step_break_positions(answer: str):
-        """返回所有 '\n\n' 的起始字符下标列表，用于按“步”切分。"""
-        pos = []
-        start = 0
+        """返回所有 '\n\n' 的起始字符下标列表，用于按“步”切分（只看 answer）。"""
+        a = _norm_newlines(answer)
+        pos, start = [], 0
         while True:
-            i = answer.find("\n\n", start)
+            i = a.find("\n\n", start)
             if i == -1:
                 break
             pos.append(i)
@@ -321,28 +325,14 @@ def main(config_path):
         return pos
 
     def _answer_prefix_by_k_steps(answer: str, k: int) -> str:
-        """保留前 k 步（k 次 '\n\n' 之前的内容）。若不足 k 步，则返回全文。"""
+        """保留前 k 步（第 k 个 '\n\n' 的起始处 截断，不包含该分隔本身）。不足 k 步则返回全文。"""
+        a = _norm_newlines(answer)
         if k <= 0:
             return ""
-        brks = _step_break_positions(answer)
+        brks = _step_break_positions(a)
         if len(brks) >= k:
-            return answer[:brks[k-1]]
-        return answer
-
-    def _boundary_token_idx(qa: str, boundary_char: int, tokenizer) -> int:
-        """
-        在单次分词(qa)上，把字符边界 boundary_char 映射到 token 索引。
-        """
-        enc = tokenizer(qa, add_special_tokens=True, return_offsets_mapping=True)
-        if len(enc["input_ids"]) == 0:
-            return 0
-        for t, (s, e) in enumerate(enc["offset_mapping"]):
-            if s <= boundary_char < e:
-                return t
-            if boundary_char == e and t + 1 < len(enc["offset_mapping"]):
-                return t + 1
-        return len(enc["input_ids"]) - 1
-
+            return a[:brks[k-1]]
+        return a
 
     def _last_token_before_char(qa: str, boundary_char: int, tokenizer) -> int:
         """
@@ -351,54 +341,80 @@ def main(config_path):
         """
         enc = tokenizer(qa, add_special_tokens=True, return_offsets_mapping=True)
         ids = enc["input_ids"]; offs = enc["offset_mapping"]
-        if not ids: return 0
-        target = max(0, boundary_char - 1)  # 边界前一个字符
-        # 优先找覆盖 target 的 token
+        if not ids:
+            return 0
+        # 重点：target 落在“边界前一个字符”
+        target = max(0, boundary_char - 1)
+        # 1) 优先找覆盖 target 的 token
         for t, (s, e) in enumerate(offs):
             if s <= target < e:
                 return t
-        # 兜底：找 e <= target 的最后一个 token
+        # 2) 兜底：找 e <= target 的最后一个 token
         for t in range(len(offs)-1, -1, -1):
             if offs[t][1] <= target:
                 return t
         return 0
 
-    def _token_len_of_qa(prompt: str, ans_part: str, tokenizer) -> int:
-        """返回 tokenize(prompt + ans_part, add_special_tokens=True) 的 token 数。"""
-        return len(tokenizer(prompt + ans_part, add_special_tokens=True)["input_ids"])
+    def _token_len_answer(ans_part: str, tokenizer) -> int:
+        """仅计算思维片段（不含 prompt）的 token 数，用于 slow 步数匹配。"""
+        return len(tokenizer(ans_part, add_special_tokens=False)["input_ids"])
 
     def _truncate_qa_and_anchor_from_ans_part(prompt: str, ans_part: str, tokenizer,
                                             max_tokens: int = MAX_TOK_HS, safety: int = SAFETY):
         """
-        给定已选好的 ans_part（初始段），拼 qa 并计算锚点：
-        - 若未触顶：锚点=初始段字符边界映射到的 token
-        - 若触上限(cap=max_tokens-safety)：截到 cap，锚点=末 token
-        返回：(qa_hs, anchor_tok_idx)
+        给定已选好的初始段 ans_part：
+        - 未触顶：锚点=初始段最后一个 token
+        - 触顶 (cap=max_tokens-safety)：截到 cap，锚点=末 token
+        返回：(qa_hs, anchor_tok_idx, debug_info)
         """
         qa = prompt + ans_part
         enc = tokenizer(qa, add_special_tokens=True, return_offsets_mapping=True)
-        ids = enc["input_ids"]
+        ids = enc["input_ids"]; offs = enc["offset_mapping"]
         cap = max(0, (max_tokens or 0) - (safety or 0))
 
-        boundary_char = len(prompt) + len(ans_part)
-
         if cap > 0 and len(ids) > cap:
+            # 上限截断：用 token 级截断再 decode，锚点取末 token
             ids = ids[:cap]
-            qa = tokenizer.decode(ids, skip_special_tokens=False, clean_up_tokenization_spaces=False)
+            qa  = tokenizer.decode(ids, skip_special_tokens=False, clean_up_tokenization_spaces=False)
             anchor_tok_idx = len(ids) - 1
+            dbg = {"truncated": True, "cap": cap, "anchor_strategy": "end_token"}
         else:
-            anchor_tok_idx = _last_token_before_char(qa, boundary_char, tokenizer)
+            boundary_char   = len(prompt) + len(ans_part)
+            anchor_tok_idx  = _last_token_before_char(qa, boundary_char, tokenizer)
+            dbg = {"truncated": False, "cap": cap, "anchor_strategy": "last_token_before_boundary",
+                "boundary_char": boundary_char}
 
-        return qa, anchor_tok_idx
+        return qa, anchor_tok_idx, dbg
+
+    def _choose_k_for_slow(ans_s: str, target_len: int, tokenizer):
+        """
+        在 slow 的 {前1步..前K步} 中选 k，使“思维片段 token 数”最接近 target_len。
+        若 gap 相同，取更小的 k（更短的初始段）。
+        返回 (best_k, best_len, per_k_list)
+        """
+        a_s = _norm_newlines(ans_s)
+        brks = _step_break_positions(a_s)
+        K = max(1, len(brks))  # 至少考虑 1 步；若 0 个分隔，则 K=1 表示“全文”
+        best_k, best_gap, best_len = 1, float("inf"), None
+        record = []
+        for k in range(1, K + 1):
+            cand = _answer_prefix_by_k_steps(a_s, k)
+            clen = _token_len_answer(cand, tokenizer)
+            gap  = abs(clen - target_len)
+            record.append((k, clen, gap))
+            if gap < best_gap or (gap == best_gap and k < best_k):
+                best_k, best_gap, best_len = k, gap, clen
+        return best_k, best_len, record
 
     def build_hs_pack_pairwise(texts_fast, answers_fast, texts_slow, answers_slow,
-                            tokenizer, max_tokens: int = MAX_TOK_HS, safety: int = SAFETY):
+                            tokenizer, max_tokens: int = MAX_TOK_HS, safety: int = SAFETY,
+                            verbose_check: bool = True):
         """
-        与论文对齐的成对构造：
-        1) fast：固定“前 2 步”为初始段
-        2) slow：在 {前1步, 前2步, …} 里选一个，使 len(prompt_slow+初始段) 最接近
-                len(prompt_fast+前2步)（目标长度），以抵消长度/位置差异
-        3) 锚点均取“初始段最后一个 token”（若触顶则末 token）
+        论文对齐的成对构造：
+        fast：固定保留前 2 步（不足 2 步则全文）
+        slow：选 k ∈ {1..K} 使“思维片段 token 数”最接近 fast 的初始段
+        锚点：初始段最后一个 token（若触顶则末 token）
+        返回：(qa_fast, pos_fast, qa_slow, pos_slow)
         """
         assert len(texts_fast) == len(texts_slow) == len(answers_fast) == len(answers_slow)
         N = len(texts_fast)
@@ -410,58 +426,67 @@ def main(config_path):
             prompt_f, ans_f = texts_fast[i], answers_fast[i]
             prompt_s, ans_s = texts_slow[i], answers_slow[i]
 
-            # --- fast: 保留前 2 步 ---
-            ans_f_init = _answer_prefix_by_k_steps(ans_f, 2)  # 不足 2 步则用全文
-            # 目标长度用“未截 cap 的理论长度”，更贴近论文的“长度匹配”定义
-            target_len = _token_len_of_qa(prompt_f, ans_f_init, tokenizer)
+            # --- fast: 前 2 步（只按 answer 切步） ---
+            ans_f_init = _answer_prefix_by_k_steps(ans_f, 2)
+            target_len = _token_len_answer(ans_f_init, tokenizer)
 
-            qa_f_i, pos_f_i = _truncate_qa_and_anchor_from_ans_part(
+            qa_f_i, pos_f_i, dbg_f = _truncate_qa_and_anchor_from_ans_part(
                 prompt_f, ans_f_init, tokenizer, max_tokens, safety
             )
-            qa_fast.append(qa_f_i)
-            pos_fast.append(pos_f_i)
+            qa_fast.append(qa_f_i); pos_fast.append(pos_f_i)
 
-            # --- slow: 在 1..K 步中选最接近 target_len 的 k ---
-            brks = _step_break_positions(ans_s)
-            K = max(1, len(brks))  # 至少考虑 1 步；如果一处 '\n\n' 都没有，K=1 等价于全文
-            best_k, best_gap, best_len = 1, float("inf"), None
+            # --- slow: 选 k 使“思维片段 token 数”最接近 target_len ---
+            best_k, best_len, per_k = _choose_k_for_slow(ans_s, target_len, tokenizer)
+            ans_s_init = _answer_prefix_by_k_steps(ans_s, best_k)
 
-            for k in range(1, K + 1):
-                cand_init = _answer_prefix_by_k_steps(ans_s, k)
-                cand_len  = _token_len_of_qa(prompt_s, cand_init, tokenizer)
-                gap = abs(cand_len - target_len)
-                # 规则：gap 更小优先；gap 相等取更小的 k（更短的初始段）
-                if gap < best_gap or (gap == best_gap and k < best_k):
-                    best_k, best_gap, best_len = k, gap, cand_len
-                    best_init = cand_init
-
-            qa_s_i, pos_s_i = _truncate_qa_and_anchor_from_ans_part(
-                prompt_s, best_init, tokenizer, max_tokens, safety
+            qa_s_i, pos_s_i, dbg_s = _truncate_qa_and_anchor_from_ans_part(
+                prompt_s, ans_s_init, tokenizer, max_tokens, safety
             )
-            qa_slow.append(qa_s_i)
-            pos_slow.append(pos_s_i)
+            qa_slow.append(qa_s_i); pos_slow.append(pos_s_i)
+
+            if verbose_check and i < 5:  # 仅前几个样本打自检日志，避免刷屏
+                print(f"[pairwise #{i}] target_len(fast-2steps)={target_len}")
+                print(f"  slow choices (k,len,gap): {per_k}")
+                print(f"  chosen k={best_k}, len={best_len}")
+                print(f"  fast dbg: {dbg_f}, slow dbg: {dbg_s}")
+                # 额外：校验“preview 的第2个分隔字符位置”与我们构造的一致性（只对 fast 演示）
+                brks_f = _step_break_positions(_norm_newlines(ans_f))
+                if len(brks_f) >= 2:
+                    boundary_char_answer = brks_f[1]  # answer 空间的第2个 \n\n 的起始位置
+                    # 对应到 QA 空间：prompt+answer
+                    boundary_char_qa = len(prompt_f) + boundary_char_answer
+                    # 验证“pos_f_i”确实是“边界前最后一个 token”
+                    enc = tokenizer(qa_f_i, add_special_tokens=True, return_offsets_mapping=True)
+                    offs = enc["offset_mapping"]; ids = enc["input_ids"]
+                    # 找覆盖 boundary_char_qa-1 的 token
+                    tgt = max(0, boundary_char_qa - 1)
+                    cover = None
+                    for t,(s,e) in enumerate(offs):
+                        if s <= tgt < e:
+                            cover = t; break
+                    print(f"  [check] preview 2nd-break char@answer={boundary_char_answer}, "
+                        f"char@qa={boundary_char_qa}, mapped_token={cover}, anchor={pos_f_i}, "
+                        f"seq_len={len(ids)}")
 
         return qa_fast, pos_fast, qa_slow, pos_slow
 
     # —— 用在 fast/slow 上 —— #
     qa_fast, fast_pos, qa_slow, slow_pos = build_hs_pack_pairwise(
         texts_fast, ans_fast, texts_slow, ans_slow, tokenizer,
-        max_tokens=MAX_TOK_HS, safety=SAFETY
+        max_tokens=MAX_TOK_HS, safety=SAFETY, verbose_check=True
     )
 
-
-    
-    # 可选：看长度分布
+    # （可选）长度分布
+    import numpy as np
     def _toklen(t): 
         return len(tokenizer(t, add_special_tokens=True)["input_ids"])
     fast_hs_len = np.array([_toklen(t) for t in qa_fast], dtype=np.int32)
     slow_hs_len = np.array([_toklen(t) for t in qa_slow], dtype=np.int32)
-    print(f"[HS-short] fast mean={fast_hs_len.mean():.1f}, max={fast_hs_len.max()}, n={len(fast_hs_len)}")
-    print(f"[HS-short] slow mean={slow_hs_len.mean():.1f}, max={slow_hs_len.max()}, n={len(slow_hs_len)}")
-    
-    del fast_hs_len,slow_hs_len
-    
-    
+    print(f"[HS-short(pairwise)] fast mean={fast_hs_len.mean():.1f}, max={fast_hs_len.max()}, n={len(fast_hs_len)}")
+    print(f"[HS-short(pairwise)] slow mean={slow_hs_len.mean():.1f}, max={slow_hs_len.max()}, n={len(slow_hs_len)}")
+    del fast_hs_len, slow_hs_len
+
+        
     
     
 
