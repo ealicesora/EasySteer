@@ -4,3 +4,4 @@ __pycache__/
 easysteer.egg-info/
 replications/controlingthinkingspeed/hs_dump_glm9b_slowfast.npz
 replications/controlingthinkingspeed/*.txt
+replications/controlingthinkingspeed/GLM_MATH500**

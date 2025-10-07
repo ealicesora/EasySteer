@@ -12,7 +12,7 @@ os.environ["VLLM_USE_V1"] = "0"
 # os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
 # vector_path = "vectors/thinking_switch_pca_MATH-500.gguf" #MATH-500
-vector_path = "/home/bingxing2/ailab/gaoyuanyuan_p/yuning/EasySteer/replications/controlingthinkingspeed/GLM_MATH500_fix_center_with_alright_256_prefill/used.gguf"
+vector_path = "/home/bingxing2/ailab/gaoyuanyuan_p/yuning/EasySteer/replications/controlingthinkingspeed/GLM_MATH500_fix_center_with_alright_256_fixed/used.gguf"
 
 from transformers import AutoTokenizer
 tokenizer = AutoTokenizer.from_pretrained(
@@ -26,14 +26,14 @@ control_vector = StatisticalControlVector.import_gguf(vector_path)
 # print(control_vector)
 
 
-sampling_params = SamplingParams(temperature=0.0,max_tokens=1024)
+sampling_params = SamplingParams(temperature=0.0,max_tokens=4096)
 
 # Define test ranges
 TEST_LAYERS = list(range(18, 38,10))  # Layers 20-39
 TEST_SCALES = [ 2.0, 4.0,  -2.0, -4.0, ]
 
 # Configuration
-NUM_QUESTIONS = 10  # Number of questions to test
+NUM_QUESTIONS = 1  # Number of questions to test
 JSONL_FILE_PATH = "/home/bingxing2/ailab/gaoyuanyuan_p/yuning/temp/test.jsonl"
 
 def build_glm_prompt(q: str) -> str:
@@ -61,7 +61,7 @@ print(f"Loaded {len(questions)} questions\n")
 
 
 
-llm = LLM(model=model_path, enable_steer_vector=True, tensor_parallel_size=1,enforce_eager=True,    gpu_memory_utilization=0.90,
+llm = LLM(model=model_path, enable_steer_vector=True, tensor_parallel_size=1,enforce_eager=False,    gpu_memory_utilization=0.90,
     trust_remote_code=True)
 
 # Store results: {(layer, scale): [lengths for each question]}
@@ -73,13 +73,13 @@ print("GENERATING BASELINE (no steering)...")
 print("=" * 80)
 baseline_lengths = []
 
-for i, question in enumerate(questions):
-    text = build_glm_prompt(question)
-    output = llm.generate(text, sampling_params)
-    generated_text = output[0].outputs[0].text
-    length = len(tokenizer.tokenize(generated_text, add_special_tokens=True))
-    baseline_lengths.append(length)
-    print(f"Question {i+1}/{len(questions)}: {length} tokens")
+# for i, question in enumerate(questions):
+#     text = build_glm_prompt(question)
+#     output = llm.generate(text, sampling_params)
+#     generated_text = output[0].outputs[0].text
+#     length = len(tokenizer.tokenize(generated_text, add_special_tokens=True))
+#     baseline_lengths.append(length)
+#     print(f"Question {i+1}/{len(questions)}: {length} tokens")
 
 results_by_config[('baseline', 0.0)] = baseline_lengths
 print(f"\nBaseline average: {np.mean(baseline_lengths):.1f} ± {np.std(baseline_lengths):.1f} tokens\n")
