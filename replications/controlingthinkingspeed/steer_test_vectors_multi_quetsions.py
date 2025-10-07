@@ -99,6 +99,8 @@ steer_cfg = SteerVectorConfig(
 
 # llm = LLM(model=model_path, vllm_config=vconfig)
 
+# steer_cfg = None
+
 print(steer_cfg)
 llm = LLM(model=model_path, enable_steer_vector=True, tensor_parallel_size=1,enforce_eager=False,    gpu_memory_utilization=0.90,
     trust_remote_code=True,custmoized_steer_vector_config = steer_cfg)
@@ -112,13 +114,13 @@ print("GENERATING BASELINE (no steering)...")
 print("=" * 80)
 baseline_lengths = []
 
-# for i, question in enumerate(questions):
-#     text = build_glm_prompt(question)
-#     output = llm.generate(text, sampling_params)
-#     generated_text = output[0].outputs[0].text
-#     length = len(tokenizer.tokenize(generated_text, add_special_tokens=True))
-#     baseline_lengths.append(length)
-#     print(f"Question {i+1}/{len(questions)}: {length} tokens")
+for i, question in enumerate(questions):
+    text = build_glm_prompt(question)
+    output = llm.generate(text, sampling_params)
+    generated_text = output[0].outputs[0].text
+    length = len(tokenizer.tokenize(generated_text, add_special_tokens=True))
+    baseline_lengths.append(length)
+    print(f"Question {i+1}/{len(questions)}: {length} tokens")
 
 results_by_config[('baseline', 0.0)] = baseline_lengths
 print(f"\nBaseline average: {np.mean(baseline_lengths):.1f} ± {np.std(baseline_lengths):.1f} tokens\n")
@@ -138,8 +140,8 @@ for layer in TEST_LAYERS:
         print("=" * 80)
 
         steer_vector_request = SteerVectorRequest(
-            steer_vector_name=f"layer{layer}_scale{scale}",
-            steer_vector_id=current_config,
+            steer_vector_name="graph_warmup",
+            steer_vector_id=1,
             steer_vector_local_path=vector_path,
             scale=scale,
             target_layers=list(range(layer,38)),
@@ -155,7 +157,7 @@ for layer in TEST_LAYERS:
             length = len(tokenizer.tokenize(generated_text, add_special_tokens=True))
             config_lengths.append(length)
             print(f"Question {i+1}/{len(questions)}: {length} tokens")
-
+            print(generated_text)
         results_by_config[config_key] = config_lengths
         avg_length = np.mean(config_lengths)
         std_length = np.std(config_lengths)
