@@ -5,14 +5,33 @@ import numpy as np
 
 from vllm.steer_vectors.request import SteerVectorRequest
 from vllm import LLM, SamplingParams
+from vllm.config import VllmConfig
+
+from vllm.config import SteerVectorConfig
 
 model_path = "/home/bingxing2/ailab/gaoyuanyuan_p/GLM-4.1V-9B-Thinking"
+import torch
+import dataclasses
 
 os.environ["VLLM_USE_V1"] = "0"
 # os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
 # vector_path = "vectors/thinking_switch_pca_MATH-500.gguf" #MATH-500
 vector_path = "/home/bingxing2/ailab/gaoyuanyuan_p/yuning/EasySteer/replications/controlingthinkingspeed/GLM_MATH500_fix_center_with_alright_256_fixed/used.gguf"
+
+
+# export VLLM_STEER_GRAPH_WARMUP_JSON='{
+#   "steer_vector_name": "graph_warmup",
+#   "steer_vector_id": 1,
+#   "steer_vector_local_path": "/home/bingxing2/ailab/gaoyuanyuan_p/yuning/EasySteer/replications/controlingthinkingspeed/GLM_MATH500_fix_center_with_alright_256_fixed/used.gguf",
+#   "scale": 2.0,
+#   "target_layers": [28,29,30,31,32,33,34],  
+#   "prefill_trigger_tokens": [],
+#   "generate_trigger_tokens": [-1],
+#   "algorithm": "direct",
+#   "debug": false
+# }'
+
 
 from transformers import AutoTokenizer
 tokenizer = AutoTokenizer.from_pretrained(
@@ -60,9 +79,29 @@ questions = load_questions(JSONL_FILE_PATH, NUM_QUESTIONS)
 print(f"Loaded {len(questions)} questions\n")
 
 
+warmup_req = SteerVectorRequest(
+    steer_vector_name="graph_warmup",
+    steer_vector_id=1,
+    steer_vector_local_path=vector_path,
+    scale=2.0,
+    target_layers=list(range(18,38)),
+    generate_trigger_tokens=[-1],
+    debug=False,
+    algorithm='direct'
+)
 
+steer_cfg = SteerVectorConfig(
+    max_steer_vectors=1,
+    adapter_dtype=torch.float16,
+    graph_warmup_request=warmup_req,        # 可以直接塞类实例
+)
+
+
+# llm = LLM(model=model_path, vllm_config=vconfig)
+
+print(steer_cfg)
 llm = LLM(model=model_path, enable_steer_vector=True, tensor_parallel_size=1,enforce_eager=False,    gpu_memory_utilization=0.90,
-    trust_remote_code=True)
+    trust_remote_code=True,custmoized_steer_vector_config = steer_cfg)
 
 # Store results: {(layer, scale): [lengths for each question]}
 results_by_config = {}
