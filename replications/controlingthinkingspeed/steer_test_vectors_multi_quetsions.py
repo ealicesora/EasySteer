@@ -48,11 +48,11 @@ control_vector = StatisticalControlVector.import_gguf(vector_path)
 sampling_params = SamplingParams(temperature=0.0,max_tokens=4096)
 
 # Define test ranges
-TEST_LAYERS = list(range(18, 38,10))  # Layers 20-39
+TEST_LAYERS = list(range(18, 38,30))  # Layers 20-39
 TEST_SCALES = [ 2.0, 4.0,  -2.0, -4.0, ]
 
 # Configuration
-NUM_QUESTIONS = 1  # Number of questions to test
+NUM_QUESTIONS = 100  # Number of questions to test
 JSONL_FILE_PATH = "/home/bingxing2/ailab/gaoyuanyuan_p/yuning/temp/test.jsonl"
 
 def build_glm_prompt(q: str) -> str:
@@ -99,10 +99,10 @@ steer_cfg = SteerVectorConfig(
 
 # llm = LLM(model=model_path, vllm_config=vconfig)
 
-# steer_cfg = None
+steer_cfg = None
 
 print(steer_cfg)
-llm = LLM(model=model_path, enable_steer_vector=True, tensor_parallel_size=1,enforce_eager=False,    gpu_memory_utilization=0.90,
+llm = LLM(model=model_path, enable_steer_vector=True, tensor_parallel_size=1,enforce_eager=True,    gpu_memory_utilization=0.90,
     trust_remote_code=True,custmoized_steer_vector_config = steer_cfg)
 
 # Store results: {(layer, scale): [lengths for each question]}
@@ -114,10 +114,16 @@ print("GENERATING BASELINE (no steering)...")
 print("=" * 80)
 baseline_lengths = []
 
-for i, question in enumerate(questions):
-    text = build_glm_prompt(question)
-    output = llm.generate(text, sampling_params)
-    generated_text = output[0].outputs[0].text
+# Prepare all prompts as a batch
+baseline_prompts = [build_glm_prompt(q) for q in questions]
+print(f"Processing {len(baseline_prompts)} questions in batch...")
+
+# Generate in batch
+outputs = llm.generate(baseline_prompts, sampling_params)
+
+# Process outputs
+for i, output in enumerate(outputs):
+    generated_text = output.outputs[0].text
     length = len(tokenizer.tokenize(generated_text, add_special_tokens=True))
     baseline_lengths.append(length)
     print(f"Question {i+1}/{len(questions)}: {length} tokens")
@@ -150,14 +156,20 @@ for layer in TEST_LAYERS:
             algorithm='direct'
         )
 
-        for i, question in enumerate(questions):
-            text = build_glm_prompt(question)
-            output = llm.generate(text, sampling_params, steer_vector_request=steer_vector_request)
-            generated_text = output[0].outputs[0].text
+        # Prepare all prompts as a batch
+        steer_prompts = [build_glm_prompt(q) for q in questions]
+        print(f"Processing {len(steer_prompts)} questions in batch...")
+
+        # Generate in batch with steer vector
+        outputs = llm.generate(steer_prompts, sampling_params, steer_vector_request=steer_vector_request)
+
+        # Process outputs
+        for i, output in enumerate(outputs):
+            generated_text = output.outputs[0].text
             length = len(tokenizer.tokenize(generated_text, add_special_tokens=True))
             config_lengths.append(length)
             print(f"Question {i+1}/{len(questions)}: {length} tokens")
-            print(generated_text)
+
         results_by_config[config_key] = config_lengths
         avg_length = np.mean(config_lengths)
         std_length = np.std(config_lengths)
